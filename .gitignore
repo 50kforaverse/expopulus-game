@@ -1,0 +1,14 @@
+.idea
+.vscode
+**/node_modules
+**/.DS_Store
+**/react-app-env.d.ts
+data
+meta/**/wallet.json
+meta/**/wallet-final.json
+meta/**/config.json
+tcg_portal/public/build
+node_modules/**/*
+typechain/**/*
+cache/**/*
+artifacts/**/*
