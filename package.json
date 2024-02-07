@@ -47,6 +47,7 @@
     "lodash": "^4.17.21",
     "mocha": "^8.1.3",
     "solidity-coverage": "^0.7.16",
+    "solmate": "transmissions11/solmate",
     "ts-node": "10.4.0",
     "typechain": "5.2.0",
     "typescript": "4.4.4"

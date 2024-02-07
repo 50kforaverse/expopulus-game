@@ -38,24 +38,35 @@ contract ExPopulusCards is ERC721A, Ownable {
 
 
 	function mintCard(uint256 _quantity, address _to, NftData[] calldata _data) canMint() external{
-		console.log("minting card");
-		console.log(_quantity);
-		console.log(_data.length);
 		if(_quantity != _data.length){
-			console.log("reverting");
 			revert InvalidMintParams();
 		}
+		
 		uint256 startIndex = totalSupply();
 		_safeMint(_to, _quantity);
+		
 		for(uint256 i = 0; i < _quantity; i++){
-			console.log("cehcking ability");
 			require(_checkAbility(_data[i]), "ExPopulusCards: Invalid ability");
 			nftData[startIndex + i] = _data[i];
 		}
 	}
 
-	function getCard(uint256 _index) external view returns(NftData memory){
-		return nftData[_index];
+	function getCardsAndAssertOwnership(uint256[] calldata tokenIds, address owner) external view returns(NftData[] memory){
+		NftData[] memory deck = new NftData[](tokenIds.length);
+		for(uint256 i = 0; i < tokenIds.length; i++){
+			require(ownerOf(tokenIds[i]) == owner, "ExPopulusCards: Not owner of token");
+			deck[i] = nftData[tokenIds[i]];
+		}
+		return deck;
+	}
+
+
+	function getCards(uint256[] calldata _index) external view returns(NftData[] memory){
+		ExPopulusCards.NftData[] memory deck = new ExPopulusCards.NftData[](_index.length);
+		for(uint256 i = 0; i < _index.length; i++){
+			deck[i] = nftData[_index[i]];
+		}
+		return deck;
 	}
 
 
