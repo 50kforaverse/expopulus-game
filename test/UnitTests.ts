@@ -2,26 +2,18 @@ import hre from "hardhat";
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/dist/src/signer-with-address";
 import { Signers } from "../types";
 import { expect } from "chai";
-import { deployContracts, IConstructorArgs } from "../deploy_scripts/main";
+import { deployContracts } from "../deploy_scripts/main";
 
 describe("Unit tests", function () {
-	const constructorArgs: IConstructorArgs = {
-		exPopulusCardsConstructor: {
-			name: "ExPopulusCards",
-			symbol: "EPC"
-		},
-	};
-	beforeEach(async function () {
-		console.log("before running")
 
+	beforeEach(async function () {
 		this.signers = {} as Signers;
 		const signers: SignerWithAddress[] = await hre.ethers.getSigners();
 		this.signers.creator = signers[0];
 		this.signers.testAccount2 = signers[1];
 		this.signers.testAccount3 = signers[2];
 
-		console.log("deploying contracts...")
-		this.contracts = await deployContracts(constructorArgs);
+		this.contracts = await deployContracts();
 	})
 
 	async function setUpPlayer1AsWinner() {
@@ -107,14 +99,20 @@ describe("Unit tests", function () {
 	});
 
 	describe("User Story #2 (Ability Configuration)", async function () {
-		it("allows priority to be se for ability", async function () {
-			await this.contracts.exPopulusCards.connect(this.signers.creator).assignPriority(1, 1);
+		it("allows priority to be set for ability", async function () {
+			await this.contracts.exPopulusCards.connect(this.signers.creator).assignPriority(0, 7);
 		});
 
 		it("does not allow randomer to assign priority", async function () {
 			await expect(this.contracts.exPopulusCards.connect(this.signers.testAccount3).
 				assignPriority(2, 2)).
 				to.be.revertedWithCustomError(this.contracts.exPopulusCards, "NotAuthorized");
+		});
+
+		it("does not allow existing priority to be set", async function () {
+			await expect(this.contracts.exPopulusCards.connect(this.signers.creator).
+				assignPriority(0, 1)).
+				to.be.revertedWithCustomError(this.contracts.exPopulusCards, "InvalidAbilityPriority");
 		});
 	});
 
@@ -187,19 +185,28 @@ describe("Unit tests", function () {
 
 	});
 
-	describe.only("User Story #5 (Battle Logs & Historical Lookup)", async function () {
+	describe("User Story #5 (Battle Logs & Historical Lookup)", async function () {
 		beforeEach(async function () {
 			await setUpPlayer1AsWinner.bind(this)();
 		});
 
 		it("admin wins and this is recorded", async function () {
 			await adminCallsBattle.bind(this)();
+
+			const timestampNow = (await hre.ethers.provider.getBlock("latest")).timestamp;
+
 			const battleKey = await this.contracts.exPopulusCardGameLogic.connect(this.signers.creator)
-				.getBattleKey();
+				.getBattleKey(this.signers.creator.address, timestampNow, 0);
+
 			const battleLogs = await this.contracts.exPopulusCardGameLogic
 				.connect(this.signers.creator).getBattleDetails(battleKey);
-			console.log("battleLogs", battleLogs)
-			// expect(battleLogs).to.deep.equal([2]);
+
+			const result = "0x000000000000000000000000000000000000000000000000000000006f016f01"
+			// make an array of three results
+			const resultArray = Array(3).fill(result)
+
+			expect(battleLogs[0]).to.deep.equal([0]);
+			expect(battleLogs[2]).to.deep.equal(resultArray);
 		});
 	});
 });

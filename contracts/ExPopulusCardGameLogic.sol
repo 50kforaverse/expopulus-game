@@ -3,45 +3,71 @@ pragma solidity ^0.8.12;
 import {ExPopulusCards} from "./ExPopulusCards.sol";
 import {ExPopulusToken} from "./ExPopulusToken.sol";
 
-import "hardhat/console.sol";
-
+///@title ExPopulusCardGameLogic
+///@notice Contract containing the logic for the ExPopulus card game
+/// using the ExPopulusCards and ExPopulusToken contracts
 contract ExPopulusCardGameLogic {
 
+	///@notice Enum representing the result of a battle
 	enum BattleResultStatus {WIN, LOSE, DRAW}
 
+	///@notice Struct representing a pair of cards to be used in a battle
 	struct BattlePair {
 		ExPopulusCards.NftData playerCard;
 		ExPopulusCards.NftData enemyCard;
 	}
 
+	///@notice Struct representing the result of a battle
+	struct BattleResult {
+		BattleResultStatus status;
+		bytes32 [] rounds;
+	}
+
+	///@notice Struct representing the details of a battle
 	struct BattleDetails {
+		uint256[] playerTokenIds;
+		uint256[] enemyTokenIds;
 		bytes32[] rounds;
 	}
 
-	event BattleResult(address indexed player, bytes32 indexed battleKey, BattleResultStatus result);
+	/*********************************** EVENTS ************************************/
 
+	///@notice Event emitted when a battle is completed
+	event Battle(address indexed player, bytes32 indexed battleKey, uint256[] playerTokenIds, uint256[] enemyTokenIds, BattleResultStatus result);
 
+	/*********************************** STATE VARIABLES ************************************/
+
+	///@notice The ExPopulusCards contract
 	ExPopulusCards public immutable cards;
+
+	///@notice  The ExPopulusToken contract
 	ExPopulusToken public immutable token;
 
-	mapping(address => uint256) public winStreak;
+	///@notice  A mapping of the win streak of each player
+	mapping(address => uint32) public winStreak;
 	
-	/*
+	///@notice  A mapping of the battle details for each battle
+	/** @dev
 		bytes32 key is keccak(abi.encode({msg.sender || battleTimestamp || winStreak})
 			this should be unique for each battle, even if in same block
 		rounds is an array of bytes32, each representing the battle data for each round
 		round data is stored as follows:
 			health, attack and ability are pushed to the data as Least Significant Bits
-		This cant overflow because the max value for each of these is uint8 - 8 * 3 = 24 bits per player
+		This wont overflow because the max value for each of these is uint8 - 8 * 3 = 24 bits per player
 	*/
-	mapping(bytes32 => bytes32[]) internal battleDetails;
+	mapping(bytes32 => BattleDetails) internal battleDetails;
 
+	/*********************************** CONSTRUCTOR ************************************/
 
 	constructor(ExPopulusCards _cards, ExPopulusToken _token) {
 		cards = _cards;
 		token = _token;
 	}
 
+	/*********************************** EXTERNAL FUNCTIONS ************************************/
+
+	///@notice Function to initiate a battle
+	///@param tokenIds An array of tokenIds representing the cards to be used in the battle
 	function battle(uint256[] calldata tokenIds) external returns (bytes32){
 		require(tokenIds.length <= 3, "ExPopulusCardGameLogic: Too many tokens");
 		
@@ -51,27 +77,47 @@ contract ExPopulusCardGameLogic {
 		ExPopulusCards.NftData[] memory enemyDeck = cards.getCards(enemyTokenIds);
 		require(enemyDeck.length == 3, "ExPopulusCardGameLogic: Invalid deck");
 
-		bytes32 battleKey = keccak256(abi.encodePacked(msg.sender, block.timestamp, winStreak[msg.sender]));
-		BattleResultStatus battleResult = _battleLogic(battleKey, playerDeck, enemyDeck);
+		// get ability priorities
+		uint8[] memory abilityPriorities = new uint8[](tokenIds.length + enemyTokenIds.length);
+		abilityPriorities = cards.getAbilityPriority(abilityPriorities);
 
-		_processBattleResults(battleResult);
-		emit BattleResult(msg.sender, battleKey, battleResult);
+
+		bytes32 battleKey = _getBattleKey();
+		BattleResult memory battleResult = _battleLogic(battleKey, playerDeck, enemyDeck, abilityPriorities);
+
+		_processBattleRewards(battleResult.status);
+
+		battleDetails[battleKey] = BattleDetails({
+			playerTokenIds: tokenIds,
+			enemyTokenIds: enemyTokenIds,
+			rounds: battleResult.rounds
+		});
+
+		emit Battle(msg.sender, battleKey, tokenIds, enemyTokenIds, battleResult.status);
 		return battleKey;
 	}
 
-	function getBattleDetails(bytes32 battleKey) external view returns(bytes32[] memory){
+	///@notice Function to get the battle details for a given battle
+	function getBattleDetails(bytes32 battleKey) external view returns(BattleDetails memory){
 		return battleDetails[battleKey];
 	}
 
-	function getBattleKey()external view returns(bytes32){
-		return _getBattleKey();
+	///@notice Function to get the battle key for a particular battle
+	function getBattleKey(address player, uint64 timestamp, uint256 _winStreak) external pure returns(bytes32){
+		return _calculateBattleKey(player, timestamp, _winStreak);
+	}
+
+	/*********************************** INTERNAL FUNCTIONS ************************************/
+
+	function _calculateBattleKey(address player, uint64 timestamp, uint256 _winStreak) internal pure returns(bytes32){
+		return keccak256(abi.encodePacked(player, timestamp, _winStreak));
 	}
 
 	function _getBattleKey()internal view returns(bytes32){
-		return keccak256(abi.encodePacked(msg.sender, block.timestamp, winStreak[msg.sender]));
+		return _calculateBattleKey(msg.sender, uint64(block.timestamp), winStreak[msg.sender]);
 	}
 
-	function _processBattleResults(BattleResultStatus battleResult) internal {
+	function _processBattleRewards(BattleResultStatus battleResult) internal {
 		uint256 rewardAmount = 0;
 		
 		if(battleResult == BattleResultStatus.WIN){
@@ -107,68 +153,70 @@ contract ExPopulusCardGameLogic {
 		return enemyTokenIds;
 	}
 
-	function _battleLogic(bytes32 battleKey, ExPopulusCards.NftData[] memory playerDeck, ExPopulusCards.NftData[] memory enemyDeck) 
-		internal returns(BattleResultStatus){
+	function _battleLogic(bytes32 battleKey, ExPopulusCards.NftData[] memory playerDeck, ExPopulusCards.NftData[] memory enemyDeck, uint8[] memory abilityPriorities) 
+		internal returns(BattleResult memory){
 		uint8 playerDeckIndex = 0;
 		uint8 enemyDeckIndex = 0;
 
-		bytes32[] storage _battleDetails = battleDetails[battleKey];
+		bytes32[] storage _battleDetails = battleDetails[battleKey].rounds;
 
-		while(playerDeckIndex < 3 && enemyDeckIndex < 3){
-			// record health, attack, and ability of each card by shifting this data as Least Significant Bits
+		uint8 playerDeckLength = uint8(playerDeck.length);
+		uint8 enemyDeckLength = uint8(enemyDeck.length);
+
+		while(playerDeckIndex < playerDeckLength && enemyDeckIndex < enemyDeckLength){
 			bytes32 dataThisRound = 0;
-			dataThisRound = dataThisRound << 8 | bytes32(uint256(playerDeck[playerDeckIndex].health)); //<< enemyDeck[enemyDeckIndex].health;
-			dataThisRound = dataThisRound << playerDeck[playerDeckIndex].attack;// << enemyDeck[enemyDeckIndex].attack;
-			dataThisRound = dataThisRound << playerDeck[playerDeckIndex].ability;// << enemyDeck[enemyDeckIndex].ability;
+			dataThisRound = _bitPackBattleDetails(dataThisRound, playerDeck[playerDeckIndex], enemyDeck[enemyDeckIndex]);
 
-			bool playerGoesFirst = _abilityComparison(playerDeck[playerDeckIndex].ability, enemyDeck[enemyDeckIndex].ability);
-			
+			bool playerGoesFirst = _abilityPriorityComparison(abilityPriorities[playerDeckIndex], abilityPriorities[playerDeckLength + enemyDeckIndex]);
+			dataThisRound = _bitPackAbilityPriority(dataThisRound, abilityPriorities[playerDeckIndex], abilityPriorities[playerDeckLength + enemyDeckIndex]);
+
 			// add both abilities to the battle details as Least Significant Bits
 			BattlePair memory resultingPair = _basicAttack(BattlePair(playerDeck[playerDeckIndex], enemyDeck[enemyDeckIndex]), playerGoesFirst);
 			
 			// add the health of the cards to the battle details as Least Significant Bits
-			// dataThisRound = dataThisRound << playerDeck[playerDeckIndex].health << enemyDeck[enemyDeckIndex].health;		
-
-			console.log("after battle playerCardHealth: %s", resultingPair.playerCard.health);
-			console.log("after battle enemyCardHealth: %s", resultingPair.enemyCard.health);
+			dataThisRound = _bitPackBattleDetails(dataThisRound, playerDeck[playerDeckIndex], enemyDeck[enemyDeckIndex]);		
 
 			// determine if any card died
 			if(resultingPair.playerCard.health == 0){
-				console.log("player card died");
 				playerDeckIndex++;
 			}
 			if(resultingPair.enemyCard.health == 0){
-				console.log("enemy card died");
 				enemyDeckIndex++;
 			}
-			console.log("dataThisRound ---->>>>");
-			console.logBytes32(dataThisRound);			
 			// add data this round to the battle details
 			_battleDetails.push(dataThisRound);
 		}
 
-		// determine winner
-		// console.log("playerDeckIndex: %s", playerDeckIndex);
-		// console.log("enemyDeckIndex: %s", enemyDeckIndex);
-		return playerDeckIndex < enemyDeckIndex ? BattleResultStatus.WIN : playerDeckIndex > enemyDeckIndex ? BattleResultStatus.LOSE : BattleResultStatus.DRAW;	
+		BattleResultStatus resultStatus = playerDeckIndex < enemyDeckIndex ? BattleResultStatus.WIN : playerDeckIndex > enemyDeckIndex ? BattleResultStatus.LOSE : BattleResultStatus.DRAW;	
+
+		return BattleResult(resultStatus, _battleDetails);
 	}
 
-	function _abilityComparison(uint8 playerAbility, uint8 enemyAbility) internal pure returns(bool){
-		return playerAbility >= enemyAbility;
+	function _bitPackAbilityPriority(bytes32 word, uint8 playerAbility, uint8 enemyAbility) internal pure returns(bytes32){
+		return word << 8 | bytes32(uint256(playerAbility)) << 8 | bytes32(uint256(enemyAbility));
 	}
 
-	function _basicAttack(BattlePair memory pair, bool playerFirst) internal pure returns(BattlePair memory){
-		
+	function _bitPackBattleDetails(bytes32 word, ExPopulusCards.NftData memory _player, ExPopulusCards.NftData memory _enemy) internal pure returns(bytes32){
+		return word << 8 | bytes32(uint256(_player.health)) << 8 | bytes32(uint256(_enemy.health)) << 8 
+		| bytes32(uint256(_player.attack)) << 8 | bytes32(uint256(_enemy.attack)) << 8 
+		| bytes32(uint256(_player.ability)) << 8 | bytes32(uint256(_enemy.ability));
+	}
+
+	function _abilityPriorityComparison(uint8 playerAbility, uint8 enemyAbility) internal pure returns(bool){
+		return playerAbility <= enemyAbility; // lower ability goes first
+	}
+
+	function _basicAttack(BattlePair memory pair, bool playerFirst) internal pure returns(BattlePair memory){		
 		if(playerFirst){
-			pair.enemyCard.health  = absDiffOrZero(pair.enemyCard.health , pair.playerCard.attack);
+			pair.enemyCard.health  = _absDiffOrZero(pair.enemyCard.health , pair.playerCard.attack);
 		}
 		else{
-			pair.playerCard.health  = absDiffOrZero(pair.playerCard.health , pair.enemyCard.attack);
+			pair.playerCard.health  = _absDiffOrZero(pair.playerCard.health , pair.enemyCard.attack);
 		}
 		return pair;
 	}
 
-	function absDiffOrZero(uint8 a, uint8 b) internal pure returns(uint8){
+	function _absDiffOrZero(uint8 a, uint8 b) internal pure returns(uint8){
 		return a > b ? a - b : 0;
 	}
 

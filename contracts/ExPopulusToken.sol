@@ -7,18 +7,26 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 ///@notice Fungible token contract for in-game rewards
 contract ExPopulusToken is ERC20, Ownable {
 
+	/*********************************** STATE VARIABLES ************************************/
+
 	///@notice Address of logic contract
 	address public logicContract;
+
+	/*********************************** MODIFIERS ************************************/
 
 	modifier onlyMinter() {
 		require(msg.sender == logicContract || msg.sender == owner(), "ExPopulusToken: Only minter can mint");
 		_;
 	}
 
+	/*********************************** CONSTRUCTOR ************************************/
+
 	constructor(string memory _name, string memory _symbol, uint8 _decimals)
 		ERC20(_name, _symbol, _decimals)
 		Ownable(msg.sender)
 	{}
+
+	/*********************************** AUTHORIZED FUNCTIONS ************************************/
 
 	///@notice Set logic contract address. Only callable by owner
 	///@param _logicContract Address of logic contract
