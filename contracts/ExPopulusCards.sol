@@ -9,8 +9,6 @@ import "hardhat/console.sol";
 ///@notice Non-fungible token contract for in-game cards
 contract ExPopulusCards is ERC721A, Ownable {
 
-	enum Ability {SHIELD, ROULETE, FREEZE}
-
 	///@notice Struct representing the data of a card
 	struct NftData {
 		uint8 attack;
@@ -47,10 +45,6 @@ contract ExPopulusCards is ERC721A, Ownable {
 
 
 	///@notice  A store of the priority of each ability	
-	// at init: 
-	// ability 0 (SHIELD) has priority value 0
-	// ability 1 (ROULETTE) has priority value 1
-	// ability 2 (FREEZE) has priority value 2
 	uint8[] public abilityPriorities; // indexed by ability value
 
 
@@ -148,6 +142,7 @@ contract ExPopulusCards is ERC721A, Ownable {
 	}
 
 	/*********************************** INTERNAL FUNCTIONS ************************************/
+	
 	function _assignPriorty(uint8 ability, uint8 priority) internal{
 		// if there is another ability with the same value revert
 		for(uint256 i = 0; i < abilityPriorities.length; i++){
@@ -160,7 +155,7 @@ contract ExPopulusCards is ERC721A, Ownable {
 		}else{
 			abilityPriorities[ability] = priority;
 		}
-		
+
 		emit AbilityPriorityUpdated(ability, priority);
 	}
 

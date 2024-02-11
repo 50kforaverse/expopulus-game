@@ -1,12 +1,13 @@
 import "../hardhat.config";
 import { ethers } from "hardhat";
 import { Signer } from "ethers";
-import { ExPopulusCardGameLogic, ExPopulusCards, ExPopulusToken } from "../typechain";
+import { ExPopulusCardGameLogic, ExPopulusCardGameLogicHarness, ExPopulusCards, ExPopulusToken } from "../typechain";
 
 export interface IDeployContractsOutput {
 	exPopulusToken: ExPopulusToken;
 	exPopulusCards: ExPopulusCards;
 	exPopulusCardGameLogic: ExPopulusCardGameLogic;
+	exPopulusCardGameLogicHarness: ExPopulusCardGameLogicHarness;
 }
 
 export interface IConstructorExPopulusCards {
@@ -34,9 +35,16 @@ export async function deployContracts(): Promise<IDeployContractsOutput> {
 
 	await exPopulusTokenContract.setLogicContract(exPopulusCardGameLogicContract.target as string)
 
+	// deploy harness for testing
+	const exPopulusGameLogicHarnessContractFactory = await ethers.getContractFactory("ExPopulusCardGameLogicHarness", creator);
+	const exPopulusCardGameLogicHarnessContract = await exPopulusGameLogicHarnessContractFactory.deploy()
+
+
+
 	return {
 		exPopulusToken: exPopulusTokenContract,
 		exPopulusCards: exPopulusCardsContract,
 		exPopulusCardGameLogic: exPopulusCardGameLogicContract,
+		exPopulusCardGameLogicHarness: exPopulusCardGameLogicHarnessContract
 	};
 }

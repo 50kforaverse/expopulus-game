@@ -3,6 +3,8 @@ pragma solidity ^0.8.12;
 import {ExPopulusCards} from "./ExPopulusCards.sol";
 import {ExPopulusToken} from "./ExPopulusToken.sol";
 
+import "hardhat/console.sol";
+
 ///@title ExPopulusCardGameLogic
 ///@notice Contract containing the logic for the ExPopulus card game
 /// using the ExPopulusCards and ExPopulusToken contracts
@@ -23,11 +25,27 @@ contract ExPopulusCardGameLogic {
 		bytes32 [] rounds;
 	}
 
-	///@notice Struct representing the details of a battle
+	///@notice Struct representing the meta details of a battle
 	struct BattleDetails {
 		uint256[] playerTokenIds;
 		uint256[] enemyTokenIds;
 		bytes32[] rounds;
+	}
+
+	///@notice Struct representing the details of a battle
+	struct BattleRoundInfo {
+		AbilityFlags playerAbilityFlags;
+		AbilityFlags enemyAbilityFlags;
+		uint8 playerDeckIndex;
+		uint8 enemyDeckIndex;
+		bool firstRound;
+	}
+
+	///@notice Struct representing the flags of a abilities
+	struct AbilityFlags {
+		bool noDamage;
+		bool noAttackOrAbility;
+		bool endGame;
 	}
 
 	/*********************************** EVENTS ************************************/
@@ -155,41 +173,116 @@ contract ExPopulusCardGameLogic {
 
 	function _battleLogic(bytes32 battleKey, ExPopulusCards.NftData[] memory playerDeck, ExPopulusCards.NftData[] memory enemyDeck, uint8[] memory abilityPriorities) 
 		internal returns(BattleResult memory){
-		uint8 playerDeckIndex = 0;
-		uint8 enemyDeckIndex = 0;
-
+		
 		bytes32[] storage _battleDetails = battleDetails[battleKey].rounds;
-
-		uint8 playerDeckLength = uint8(playerDeck.length);
-		uint8 enemyDeckLength = uint8(enemyDeck.length);
-
-		while(playerDeckIndex < playerDeckLength && enemyDeckIndex < enemyDeckLength){
-			bytes32 dataThisRound = 0;
-			dataThisRound = _bitPackBattleDetails(dataThisRound, playerDeck[playerDeckIndex], enemyDeck[enemyDeckIndex]);
-
-			bool playerGoesFirst = _abilityPriorityComparison(abilityPriorities[playerDeckIndex], abilityPriorities[playerDeckLength + enemyDeckIndex]);
-			dataThisRound = _bitPackAbilityPriority(dataThisRound, abilityPriorities[playerDeckIndex], abilityPriorities[playerDeckLength + enemyDeckIndex]);
-
-			// add both abilities to the battle details as Least Significant Bits
-			BattlePair memory resultingPair = _basicAttack(BattlePair(playerDeck[playerDeckIndex], enemyDeck[enemyDeckIndex]), playerGoesFirst);
+		
+		BattleRoundInfo memory roundInfo;
+		roundInfo.firstRound = true;
+		bool playerGoesFirst;
+		
+		while(roundInfo.playerDeckIndex < playerDeck.length && roundInfo.enemyDeckIndex < enemyDeck.length){
 			
-			// add the health of the cards to the battle details as Least Significant Bits
-			dataThisRound = _bitPackBattleDetails(dataThisRound, playerDeck[playerDeckIndex], enemyDeck[enemyDeckIndex]);		
+			bytes32 dataThisRound = _bitPackBattleDetails(0, playerDeck[roundInfo.playerDeckIndex], enemyDeck[roundInfo.enemyDeckIndex]);
 
-			// determine if any card died
-			if(resultingPair.playerCard.health == 0){
-				playerDeckIndex++;
+			// abilities only happen on the first round
+			if(roundInfo.firstRound){
+				playerGoesFirst = _abilityPriorityComparison(abilityPriorities[roundInfo.playerDeckIndex], abilityPriorities[playerDeck.length + roundInfo.enemyDeckIndex]);
+				dataThisRound = _bitPackAbilityPriority(dataThisRound, abilityPriorities[roundInfo.playerDeckIndex], abilityPriorities[playerDeck.length + roundInfo.enemyDeckIndex]);
+
+				roundInfo.playerAbilityFlags = _loadAbility(abilityPriorities[roundInfo.playerDeckIndex]);
+				roundInfo.enemyAbilityFlags = _loadAbility(abilityPriorities[playerDeck.length + roundInfo.enemyDeckIndex]);
+
+				roundInfo.firstRound = false;
+
+				// ROULETTE ABILITY
+				if(roundInfo.playerAbilityFlags.endGame || roundInfo.enemyAbilityFlags.endGame){
+					if(playerGoesFirst){
+						roundInfo.enemyDeckIndex = uint8(enemyDeck.length);
+					}
+					else{
+						roundInfo.playerDeckIndex = uint8(playerDeck.length);
+					}
+					break;				
+				}
+
+				// SHIELD ABILITY
+				// if player card does not have shield ability then enemy card can attack
+				if(!roundInfo.playerAbilityFlags.noDamage){
+					// console.log("enemy card attacking..");
+					playerDeck[roundInfo.playerDeckIndex]= _basicAttack(enemyDeck[roundInfo.enemyDeckIndex], playerDeck[roundInfo.playerDeckIndex]);
+					continue;
+				}
+				// if enemy card does not have shield ability then player card can attack
+				if(!roundInfo.enemyAbilityFlags.noDamage){
+					// console.log("player card attacking..");
+					enemyDeck[roundInfo.enemyDeckIndex] = _basicAttack(playerDeck[roundInfo.playerDeckIndex], enemyDeck[roundInfo.enemyDeckIndex]);
+					continue;
+				}
+
+				// FREEZE ABILITY
+				if(roundInfo.playerAbilityFlags.noAttackOrAbility || roundInfo.enemyAbilityFlags.noAttackOrAbility){
+					continue;
+				}
+
 			}
-			if(resultingPair.enemyCard.health == 0){
-				enemyDeckIndex++;
+				
+			// basic attack
+			if(playerGoesFirst){
+				playerDeck[roundInfo.playerDeckIndex] = _basicAttack(enemyDeck[roundInfo.enemyDeckIndex], playerDeck[roundInfo.playerDeckIndex]);
+				enemyDeck[roundInfo.enemyDeckIndex] = _basicAttack(playerDeck[roundInfo.playerDeckIndex], enemyDeck[roundInfo.enemyDeckIndex]);
 			}
+			else{
+				enemyDeck[roundInfo.enemyDeckIndex] = _basicAttack(playerDeck[roundInfo.playerDeckIndex], enemyDeck[roundInfo.enemyDeckIndex]);
+				playerDeck[roundInfo.playerDeckIndex] = _basicAttack(enemyDeck[roundInfo.enemyDeckIndex], playerDeck[roundInfo.playerDeckIndex]);
+			}
+			
+			// record basic attack results
+			dataThisRound = _bitPackBattleDetails(dataThisRound, playerDeck[roundInfo.playerDeckIndex], enemyDeck[roundInfo.enemyDeckIndex]);		
+			
+			// determine if any card died and process this
+			// console.log("checking if any card died..");
+			if(playerDeck[roundInfo.playerDeckIndex].health == 0){
+				roundInfo.playerDeckIndex++;
+				roundInfo.firstRound = true;
+			}
+			if(enemyDeck[roundInfo.enemyDeckIndex].health == 0){
+				roundInfo.enemyDeckIndex++;
+				roundInfo.firstRound = true;
+			}
+			
 			// add data this round to the battle details
-			_battleDetails.push(dataThisRound);
+			_battleDetails.push(dataThisRound);			
 		}
 
-		BattleResultStatus resultStatus = playerDeckIndex < enemyDeckIndex ? BattleResultStatus.WIN : playerDeckIndex > enemyDeckIndex ? BattleResultStatus.LOSE : BattleResultStatus.DRAW;	
-
+		BattleResultStatus resultStatus = roundInfo.playerDeckIndex < roundInfo.enemyDeckIndex ? BattleResultStatus.WIN : roundInfo.playerDeckIndex > roundInfo.enemyDeckIndex ? BattleResultStatus.LOSE : BattleResultStatus.DRAW;	
+		
 		return BattleResult(resultStatus, _battleDetails);
+	}
+
+	function _loadAbility(uint8 ability) internal view returns(AbilityFlags memory){
+		// apply abilty logic
+		/*
+			1. <b>Shield (Ability 0)</b>: Protects the casting card from any incoming damage or the effects of the freeze ability for the current turn
+			2. <b>Roulette (Ability 1)</b>: The casting card has a 10% chance to instantly end the game (by killing all opposite deck cards & bypassing the opposite card's "shield", if any) 
+			in its team's favor resulting in a win for the team. 
+			3. <b>Freeze (Ability 2)</b>: Prevents the other deck's front card from performing any abilities or basic attack for the rest of the turn.
+		*/
+		bool noDamage = false;
+		bool noAttackOrAbility = false;
+		bool endGame = false;
+		if(ability == 0){
+			noDamage = true;
+		}
+		if(ability == 1){
+			uint256 random = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao))) % 100;
+			if(random < 10){
+				endGame = true;
+			}
+		}
+		if(ability == 2){
+			noAttackOrAbility = true;
+		}
+		return AbilityFlags(noDamage, noAttackOrAbility, endGame);
 	}
 
 	function _bitPackAbilityPriority(bytes32 word, uint8 playerAbility, uint8 enemyAbility) internal pure returns(bytes32){
@@ -206,14 +299,9 @@ contract ExPopulusCardGameLogic {
 		return playerAbility <= enemyAbility; // lower ability goes first
 	}
 
-	function _basicAttack(BattlePair memory pair, bool playerFirst) internal pure returns(BattlePair memory){		
-		if(playerFirst){
-			pair.enemyCard.health  = _absDiffOrZero(pair.enemyCard.health , pair.playerCard.attack);
-		}
-		else{
-			pair.playerCard.health  = _absDiffOrZero(pair.playerCard.health , pair.enemyCard.attack);
-		}
-		return pair;
+	function _basicAttack(ExPopulusCards.NftData memory attacker, ExPopulusCards.NftData memory defender) internal pure returns(ExPopulusCards.NftData memory){			
+		uint8 newHealth =  _absDiffOrZero(defender.health , attacker.attack);
+		return ExPopulusCards.NftData(newHealth, defender.attack, defender.ability);
 	}
 
 	function _absDiffOrZero(uint8 a, uint8 b) internal pure returns(uint8){
@@ -228,5 +316,4 @@ contract ExPopulusCardGameLogic {
 		}
 		return true;
 	}
-
 }
