@@ -140,6 +140,7 @@ describe("Unit tests", function () {
 		});
 
 		it("player 1 wins once", async function () {
+			expect(await this.contracts.exPopulusCardGameLogicHarness.connect(this.signers.creator).winStreak(this.signers.creator.address)).to.equal(0);
 			await setUpPlayer1AsWinner.bind(this)();
 			expect(await this.contracts.exPopulusCardGameLogic.connect(this.signers.creator)
 				.battle([0])).to.emit(this.contracts.exPopulusCardGameLogic, "BattleResult").withArgs(this.signers.creator.address, 2);
@@ -212,7 +213,6 @@ describe("Unit tests", function () {
 			await adminCallsBattle.bind(this)();
 
 			const timestampNow = (await hre.ethers.provider.getBlock("latest")).timestamp;
-
 			const battleKey = await this.contracts.exPopulusCardGameLogic.connect(this.signers.creator)
 				.getBattleKey(this.signers.creator.address, timestampNow, 0);
 
@@ -241,14 +241,21 @@ describe("Unit tests", function () {
 					ability: FREEZE_ABILITY
 				};
 				const emptyBytes32 = hre.ethers.zeroPadValue("0x", 32);
+				const timestampNow = (await hre.ethers.provider.getBlock("latest")).timestamp;
+				const battleKey = await this.contracts.exPopulusCardGameLogic.connect(this.signers.creator)
+					.getBattleKey(this.signers.creator.address, timestampNow, 0);
 
-				let flag = false
 				// 10pc chance of winning with ROUTETTE_ABILITY
 				// set this artificially higher for testing using harness
 				await this.contracts.exPopulusCardGameLogicHarness.connect(this.signers.creator).setRandomSeed(50);
 
 				expect(await this.contracts.exPopulusCardGameLogicHarness.connect(this.signers.creator).battleLogic(emptyBytes32, [nftData1], [nftData2], [0, 0]))
-					.to.emit(this.contracts.exPopulusCardGameLogicHarness, "BattleResult").withArgs(this.signers.creator.address, 2);
+					.to.emit(this.contracts.exPopulusCardGameLogicHarness, "BattleResult").withArgs(battleKey, this.signers.creator.address, 2);
+
+				const battleLogs = await this.contracts.exPopulusCardGameLogic.connect(this.signers.creator).getBattleDetails(battleKey);
+				expect(battleLogs.length).to.be.greaterThan(0);
+
+				//todo assert that the battle logs contain the correct result
 			})
 
 			it("player wins with shield ability", async function () {
@@ -266,6 +273,7 @@ describe("Unit tests", function () {
 				expect(await this.contracts.exPopulusCardGameLogicHarness.connect(this.signers.creator).battleLogic(emptyBytes32, [nftData1], [nftData2], [0, 0]))
 					.to.emit(this.contracts.exPopulusCardGameLogicHarness, "BattleResult").withArgs(this.signers.creator.address, 2);
 
+				//todo assert that the battle logs contain the correct result
 			})
 
 
@@ -284,6 +292,7 @@ describe("Unit tests", function () {
 				expect(await this.contracts.exPopulusCardGameLogicHarness.connect(this.signers.creator).battleLogic(emptyBytes32, [nftData1], [nftData2], [0, 0]))
 					.to.emit(this.contracts.exPopulusCardGameLogicHarness, "BattleResult").withArgs(this.signers.creator.address, 2);;
 
+				//todo assert that the battle logs contain the correct result
 			})
 		})
 

@@ -176,7 +176,7 @@ contract ExPopulusCardGameLogic {
 
 	function _battleLogic(bytes32 battleKey, ExPopulusCards.NftData[] memory playerDeck, ExPopulusCards.NftData[] memory enemyDeck, uint8[] memory abilityPriorities) 
 		internal returns(BattleResult memory){
-		
+
 		bytes32[] storage _battleRoundDetails = battleDetails[battleKey].rounds;
 		
 		BattleRoundInfo memory roundInfo;
