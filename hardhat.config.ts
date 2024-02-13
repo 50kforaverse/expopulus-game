@@ -12,6 +12,7 @@ require("@nomicfoundation/hardhat-chai-matchers")
 
 import { HardhatUserConfig } from "hardhat/config";
 
+// for testing only
 const mnemonic = "major ostrich lake feed mean term sort essay claw catch deal toddler naive subject inmate";
 
 const accounts = {
