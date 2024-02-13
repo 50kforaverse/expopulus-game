@@ -33,6 +33,7 @@ export async function deployContracts(): Promise<IDeployContractsOutput> {
 	const exPopulusGameLogicContractFactory = await ethers.getContractFactory("ExPopulusCardGameLogic", creator);
 	const exPopulusCardGameLogicContract = await exPopulusGameLogicContractFactory.deploy(exPopulusCardsContract.target as string, exPopulusTokenContract.target as string)
 
+	// set logic contract in token
 	await exPopulusTokenContract.setLogicContract(exPopulusCardGameLogicContract.target as string)
 
 	// deploy harness for testing

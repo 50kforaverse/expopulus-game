@@ -1,13 +1,15 @@
+// SPDX-License-Identifier: MIT
+
 pragma solidity ^0.8.12;
 
 import {ExPopulusCardGameLogic} from "../ExPopulusCardGameLogic.sol";
 import {ExPopulusCards} from "../ExPopulusCards.sol";
 import {ExPopulusToken} from "../ExPopulusToken.sol";
 
-import "hardhat/console.sol";
-
-
+///@dev test contract to be able to preform finer grain testing of battle logic
 contract ExPopulusCardGameLogicHarness is ExPopulusCardGameLogic {
+
+    uint256 public randomSeed;
 
     constructor() ExPopulusCardGameLogic(ExPopulusCards(address(0)), ExPopulusToken(address(0))) {}
 
@@ -15,4 +17,11 @@ contract ExPopulusCardGameLogicHarness is ExPopulusCardGameLogic {
         _battleLogic(battleKey, playerDeck, enemyDeck, abilityPriorities);
     }
 
+    function setRandomSeed(uint256 seed) external {
+        randomSeed = seed;
+    }
+
+    function _getRandomSeed() internal override view returns (uint256) {
+        return randomSeed;
+    }
 }

@@ -3,6 +3,7 @@ import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/dist/src/signer-wit
 import { Signers } from "../types";
 import { expect } from "chai";
 import { deployContracts } from "../deploy_scripts/main";
+import { ContractTransaction, TransactionReceipt } from "ethers";
 
 describe("Unit tests", function () {
 
@@ -55,7 +56,8 @@ describe("Unit tests", function () {
 		it("Can mint a card to a specific player & verify ownership afterwards", async function () {
 			expect(await this.contracts.exPopulusCards.connect(this.signers.creator).
 				mintCard(1, this.signers.testAccount2.address, [nftData1])).
-				to.emit(this.contracts.exPopulusCards, "Transfer");
+				to.emit(this.contracts.exPopulusCards, "Transfer")
+				.withArgs(0, this.signers.testAccount2.address);
 
 			// zero indexed so the first card is 0
 			expect(await this.contracts.exPopulusCards.ownerOf(0)).
@@ -100,7 +102,8 @@ describe("Unit tests", function () {
 
 	describe("User Story #2 (Ability Configuration)", async function () {
 		it("allows priority to be set for ability", async function () {
-			await this.contracts.exPopulusCards.connect(this.signers.creator).assignPriority(0, 7);
+			expect(await this.contracts.exPopulusCards.connect(this.signers.creator).assignPriority(0, 7))
+				.to.emit(this.contracts.exPopulusCards, "AbilityPrioritySet").withArgs(0, 7);
 		});
 
 		it("does not allow randomer to assign priority", async function () {
@@ -113,6 +116,13 @@ describe("Unit tests", function () {
 			await expect(this.contracts.exPopulusCards.connect(this.signers.creator).
 				assignPriority(0, 1)).
 				to.be.revertedWithCustomError(this.contracts.exPopulusCards, "InvalidAbilityPriority");
+
+			// reassign first and try again (should be successful as now not existing priority)
+			await this.contracts.exPopulusCards.connect(this.signers.creator).assignPriority(1, 8);
+
+			expect(await this.contracts.exPopulusCards.connect(this.signers.creator).assignPriority(0, 7))
+				.to.emit(this.contracts.exPopulusCards, "AbilityPrioritySet").withArgs(0, 1);
+
 		});
 	});
 
@@ -190,18 +200,15 @@ describe("Unit tests", function () {
 			expect(await this.contracts.exPopulusToken.balanceOf(this.signers.creator.address)).to.equal(500 + 1000);
 
 		});
-
-
-
 	});
 
-	describe.only("User Story #5 (Battle Logs & Historical Lookup)", async function () {
+	describe("User Story #5 (Battle Logs & Historical Lookup)", async function () {
 
 		beforeEach(async function () {
 			await setUpPlayer1AsWinner.bind(this)();
 		});
 
-		it("admin wins and this is recorded", async function () {
+		it("admin wins and this is recorded and retrievable", async function () {
 			await adminCallsBattle.bind(this)();
 
 			const timestampNow = (await hre.ethers.provider.getBlock("latest")).timestamp;
@@ -212,30 +219,71 @@ describe("Unit tests", function () {
 			const battleLogs = await this.contracts.exPopulusCardGameLogic
 				.connect(this.signers.creator).getBattleDetails(battleKey);
 
-			const result = "0x000000000000000000000000000000000000000000000000000000006f016f01"
-			// make an array of three results
-			const resultArray = Array(3).fill(result)
-
-			// expect(battleLogs[0]).to.deep.equal([0]);
-			// expect(battleLogs[2]).to.deep.equal(resultArray);
+			expect(battleLogs.length).to.be.greaterThan(0);
 		});
 
 
 		describe("Game logic harness tests", async function () {
 
-			it("admin wins and this is recorded", async function () {
+			const SHIELD_ABILITY = 0
+			const ROULETTE_ABILITY = 1
+			const FREEZE_ABILITY = 2
+
+			it("player wins with roulette ability", async function () {
 				const nftData1 = {
-					attack: 2,
+					attack: 1,
 					health: 1,
-					ability: 1
+					ability: ROULETTE_ABILITY
+				};
+				const nftData2 = {
+					attack: 255, // super high health and attack intentionally so it must be the roulette ability that wins
+					health: 101,
+					ability: FREEZE_ABILITY
+				};
+				const emptyBytes32 = hre.ethers.zeroPadValue("0x", 32);
+
+				let flag = false
+				// 10pc chance of winning with ROUTETTE_ABILITY
+				// set this artificially higher for testing using harness
+				await this.contracts.exPopulusCardGameLogicHarness.connect(this.signers.creator).setRandomSeed(50);
+
+				expect(await this.contracts.exPopulusCardGameLogicHarness.connect(this.signers.creator).battleLogic(emptyBytes32, [nftData1], [nftData2], [0, 0]))
+					.to.emit(this.contracts.exPopulusCardGameLogicHarness, "BattleResult").withArgs(this.signers.creator.address, 2);
+			})
+
+			it("player wins with shield ability", async function () {
+				const nftData1 = {
+					attack: 1,
+					health: 1,
+					ability: SHIELD_ABILITY
 				};
 				const nftData2 = {
 					attack: 1,
 					health: 1,
-					ability: 1
+					ability: FREEZE_ABILITY
 				};
 				const emptyBytes32 = hre.ethers.zeroPadValue("0x", 32);
-				await this.contracts.exPopulusCardGameLogicHarness.connect(this.signers.creator).battleLogic(emptyBytes32, [nftData1], [nftData2], [0, 0]);
+				expect(await this.contracts.exPopulusCardGameLogicHarness.connect(this.signers.creator).battleLogic(emptyBytes32, [nftData1], [nftData2], [0, 0]))
+					.to.emit(this.contracts.exPopulusCardGameLogicHarness, "BattleResult").withArgs(this.signers.creator.address, 2);
+
+			})
+
+
+			it("player wins with freeze ability", async function () {
+				const nftData1 = {
+					attack: 1,
+					health: 2,
+					ability: FREEZE_ABILITY
+				};
+				const nftData2 = {
+					attack: 1,
+					health: 1,
+					ability: FREEZE_ABILITY
+				};
+				const emptyBytes32 = hre.ethers.zeroPadValue("0x", 32);
+				expect(await this.contracts.exPopulusCardGameLogicHarness.connect(this.signers.creator).battleLogic(emptyBytes32, [nftData1], [nftData2], [0, 0]))
+					.to.emit(this.contracts.exPopulusCardGameLogicHarness, "BattleResult").withArgs(this.signers.creator.address, 2);;
+
 			})
 		})
 

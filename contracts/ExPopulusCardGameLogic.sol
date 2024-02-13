@@ -1,9 +1,9 @@
+// SPDX-License-Identifier: MIT
+
 pragma solidity ^0.8.12;
 
 import {ExPopulusCards} from "./ExPopulusCards.sol";
 import {ExPopulusToken} from "./ExPopulusToken.sol";
-
-import "hardhat/console.sol";
 
 ///@title ExPopulusCardGameLogic
 ///@notice Contract containing the logic for the ExPopulus card game
@@ -68,10 +68,13 @@ contract ExPopulusCardGameLogic {
 	/** @dev
 		bytes32 key is keccak(abi.encode({msg.sender || battleTimestamp || winStreak})
 			this should be unique for each battle, even if in same block
-		rounds is an array of bytes32, each representing the battle data for each round
+		rounds is an array of bytes32, each array entry representing the battle data for each round
 		round data is stored as follows:
-			health, attack and ability are pushed to the data as Least Significant Bits
-		This wont overflow because the max value for each of these is uint8 - 8 * 3 = 24 bits per player
+			1. health, attack and ability are pushed to the data as LSB at 8 bit intervals
+			2. ability priority is packed into the next 16 bits for (player, enemy)
+			3. ability flags are packed into the next 24 bits for (player, enemy)
+
+		
 	*/
 	mapping(bytes32 => BattleDetails) internal battleDetails;
 
@@ -155,13 +158,13 @@ contract ExPopulusCardGameLogic {
 		}
 	}
 
+	///@dev this function is used to populate the enemy deck with random cards EXCLUDING the player's cards
 	function _populateEnemyTokenIds(uint256[] memory tokenIds) internal view returns(uint256[] memory){
 		uint256[] memory enemyTokenIds = new uint256[](3);
 		uint8 fufilledCards = 0;
 		uint256 nonce = 0;
 		while(fufilledCards < 3){
-			// todo: get secure randomness, not block envs
-			uint256 randomCardId = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, nonce))) % cards.totalSupply();
+			uint256 randomCardId = uint256(keccak256(abi.encode(_getRandomSeed(), nonce))) % cards.totalSupply();
 			if(_arrayDoesNotContain(tokenIds, randomCardId)){
 				enemyTokenIds[fufilledCards] = randomCardId;
 				fufilledCards++;
@@ -174,24 +177,34 @@ contract ExPopulusCardGameLogic {
 	function _battleLogic(bytes32 battleKey, ExPopulusCards.NftData[] memory playerDeck, ExPopulusCards.NftData[] memory enemyDeck, uint8[] memory abilityPriorities) 
 		internal returns(BattleResult memory){
 		
-		bytes32[] storage _battleDetails = battleDetails[battleKey].rounds;
+		bytes32[] storage _battleRoundDetails = battleDetails[battleKey].rounds;
 		
 		BattleRoundInfo memory roundInfo;
 		roundInfo.firstRound = true;
 		bool playerGoesFirst;
+
+		/*
+			The battle loop happens in three stages:
+			1. Abilities
+			2. Basic Attacks
+			3. Determine if any card died
+
+			this repeats in a loop until one actor has no more cards in their deck
+		*/
 		
 		while(roundInfo.playerDeckIndex < playerDeck.length && roundInfo.enemyDeckIndex < enemyDeck.length){
 			
 			bytes32 dataThisRound = _bitPackBattleDetails(0, playerDeck[roundInfo.playerDeckIndex], enemyDeck[roundInfo.enemyDeckIndex]);
 
-			// abilities only happen on the first round
+			// STAGE 1: abilities only happen on the first round
 			if(roundInfo.firstRound){
 				playerGoesFirst = _abilityPriorityComparison(abilityPriorities[roundInfo.playerDeckIndex], abilityPriorities[playerDeck.length + roundInfo.enemyDeckIndex]);
 				dataThisRound = _bitPackAbilityPriority(dataThisRound, abilityPriorities[roundInfo.playerDeckIndex], abilityPriorities[playerDeck.length + roundInfo.enemyDeckIndex]);
 
-				roundInfo.playerAbilityFlags = _loadAbility(abilityPriorities[roundInfo.playerDeckIndex]);
-				roundInfo.enemyAbilityFlags = _loadAbility(abilityPriorities[playerDeck.length + roundInfo.enemyDeckIndex]);
-
+				roundInfo.playerAbilityFlags = _loadAbilityFlags(playerDeck[roundInfo.playerDeckIndex].ability);
+				roundInfo.enemyAbilityFlags = _loadAbilityFlags(enemyDeck[roundInfo.enemyDeckIndex].ability);
+				dataThisRound = _bitPackAbilityFlags(dataThisRound, roundInfo.playerAbilityFlags, roundInfo.enemyAbilityFlags);
+				
 				roundInfo.firstRound = false;
 
 				// ROULETTE ABILITY
@@ -202,31 +215,33 @@ contract ExPopulusCardGameLogic {
 					else{
 						roundInfo.playerDeckIndex = uint8(playerDeck.length);
 					}
+					_battleRoundDetails.push(dataThisRound);	
 					break;				
 				}
 
 				// SHIELD ABILITY
 				// if player card does not have shield ability then enemy card can attack
 				if(!roundInfo.playerAbilityFlags.noDamage){
-					// console.log("enemy card attacking..");
 					playerDeck[roundInfo.playerDeckIndex]= _basicAttack(enemyDeck[roundInfo.enemyDeckIndex], playerDeck[roundInfo.playerDeckIndex]);
+					_battleRoundDetails.push(dataThisRound);
 					continue;
 				}
 				// if enemy card does not have shield ability then player card can attack
 				if(!roundInfo.enemyAbilityFlags.noDamage){
-					// console.log("player card attacking..");
 					enemyDeck[roundInfo.enemyDeckIndex] = _basicAttack(playerDeck[roundInfo.playerDeckIndex], enemyDeck[roundInfo.enemyDeckIndex]);
+					_battleRoundDetails.push(dataThisRound);
 					continue;
 				}
 
 				// FREEZE ABILITY
 				if(roundInfo.playerAbilityFlags.noAttackOrAbility || roundInfo.enemyAbilityFlags.noAttackOrAbility){
+					_battleRoundDetails.push(dataThisRound);
 					continue;
 				}
 
 			}
 				
-			// basic attack
+			// STAGE 2: now process basic attacks
 			if(playerGoesFirst){
 				playerDeck[roundInfo.playerDeckIndex] = _basicAttack(enemyDeck[roundInfo.enemyDeckIndex], playerDeck[roundInfo.playerDeckIndex]);
 				enemyDeck[roundInfo.enemyDeckIndex] = _basicAttack(playerDeck[roundInfo.playerDeckIndex], enemyDeck[roundInfo.enemyDeckIndex]);
@@ -239,8 +254,7 @@ contract ExPopulusCardGameLogic {
 			// record basic attack results
 			dataThisRound = _bitPackBattleDetails(dataThisRound, playerDeck[roundInfo.playerDeckIndex], enemyDeck[roundInfo.enemyDeckIndex]);		
 			
-			// determine if any card died and process this
-			// console.log("checking if any card died..");
+			// STAGE 3: determine if any card died and process this
 			if(playerDeck[roundInfo.playerDeckIndex].health == 0){
 				roundInfo.playerDeckIndex++;
 				roundInfo.firstRound = true;
@@ -251,15 +265,16 @@ contract ExPopulusCardGameLogic {
 			}
 			
 			// add data this round to the battle details
-			_battleDetails.push(dataThisRound);			
+			_battleRoundDetails.push(dataThisRound);			
 		}
 
+		// calculate if winner
 		BattleResultStatus resultStatus = roundInfo.playerDeckIndex < roundInfo.enemyDeckIndex ? BattleResultStatus.WIN : roundInfo.playerDeckIndex > roundInfo.enemyDeckIndex ? BattleResultStatus.LOSE : BattleResultStatus.DRAW;	
 		
-		return BattleResult(resultStatus, _battleDetails);
+		return BattleResult(resultStatus, _battleRoundDetails);
 	}
 
-	function _loadAbility(uint8 ability) internal view returns(AbilityFlags memory){
+	function _loadAbilityFlags(uint8 ability) internal view returns(AbilityFlags memory){
 		// apply abilty logic
 		/*
 			1. <b>Shield (Ability 0)</b>: Protects the casting card from any incoming damage or the effects of the freeze ability for the current turn
@@ -274,7 +289,7 @@ contract ExPopulusCardGameLogic {
 			noDamage = true;
 		}
 		if(ability == 1){
-			uint256 random = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao))) % 100;
+			uint256 random = _getRandomSeed() % 100;
 			if(random < 10){
 				endGame = true;
 			}
@@ -289,6 +304,11 @@ contract ExPopulusCardGameLogic {
 		return word << 8 | bytes32(uint256(playerAbility)) << 8 | bytes32(uint256(enemyAbility));
 	}
 
+	function _bitPackAbilityFlags(bytes32 word, AbilityFlags memory playerAbility, AbilityFlags memory enemyAbility) internal pure returns(bytes32){
+		return word << 8 | toBytes32(playerAbility.noDamage) << 8 | toBytes32(playerAbility.noAttackOrAbility) << 8 | toBytes32(playerAbility.endGame) << 8
+		| toBytes32(enemyAbility.noDamage) << 8 | toBytes32(enemyAbility.noAttackOrAbility) << 8 | toBytes32(enemyAbility.endGame);
+	}
+
 	function _bitPackBattleDetails(bytes32 word, ExPopulusCards.NftData memory _player, ExPopulusCards.NftData memory _enemy) internal pure returns(bytes32){
 		return word << 8 | bytes32(uint256(_player.health)) << 8 | bytes32(uint256(_enemy.health)) << 8 
 		| bytes32(uint256(_player.attack)) << 8 | bytes32(uint256(_enemy.attack)) << 8 
@@ -297,6 +317,11 @@ contract ExPopulusCardGameLogic {
 
 	function _abilityPriorityComparison(uint8 playerAbility, uint8 enemyAbility) internal pure returns(bool){
 		return playerAbility <= enemyAbility; // lower ability goes first
+	}
+
+	function _getRandomSeed() internal virtual view returns(uint256){
+		// todo: get secure randomness, not block envs
+		return uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao)));
 	}
 
 	function _basicAttack(ExPopulusCards.NftData memory attacker, ExPopulusCards.NftData memory defender) internal pure returns(ExPopulusCards.NftData memory){			
@@ -316,4 +341,8 @@ contract ExPopulusCardGameLogic {
 		}
 		return true;
 	}
+
+	function toBytes32(bool x) private pure returns (bytes32 r) {
+         assembly { r := x }
+    }
 }

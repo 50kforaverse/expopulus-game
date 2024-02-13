@@ -1,9 +1,9 @@
+// SPDX-License-Identifier: MIT
+
 pragma solidity ^0.8.13;
 
 import {ERC721A} from "erc721a/contracts/ERC721A.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-
-import "hardhat/console.sol";
 
 ///@title ExPopulusCards
 ///@notice Non-fungible token contract for in-game cards
